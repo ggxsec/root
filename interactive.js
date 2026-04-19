@@ -13,6 +13,77 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const writeups = {
 
+
+        'otp-brute-force': {
+            title: 'OTP Brute Force Leading to Account Takeover (<span class="severity-critical">Critical Severity</span> | <span class="difficulty-easy">Difficulty: Easy</span>)',
+            teaser: 'Authentication bypass and full account takeover via automated OTP guessing due to missing rate limits.',
+            severity: 'Critical',
+            difficulty: 'Easy',
+            steps: [
+                {
+                    type: 'text',
+                    content: `<h3>Scenario</h3><p>This assessment focuses on the security of an OTP-based authentication mechanism used for email verification and login in a web application.</p><p>At a basic level, the system used a 6-digit OTP code sent to the user’s email — a common and generally secure authentication method when implemented correctly.</p><p>The same OTP mechanism was used in two different flows:</p><ul><li>Email verification during registration</li><li>Login authentication for existing users</li></ul><p>The OTP remained valid for approximately 2 minutes, which initially appeared reasonable.</p><p>At first glance, everything seemed properly implemented. However, instead of assuming the system was secure, I analyzed it from an attacker’s perspective: </br><strong>What if someone tries to brute force this OTP? Is there any protection preventing repeated attempts?</strong></p>`
+                },
+                {
+                    type: 'interactive',
+                    id: 1,
+                    question: 'What is the most important security control for OTP-based authentication?',
+                    options: [
+                        { text: 'A) OTP length', correct: false, feedback: '❌ Not quite. While length matters, it doesn\'t prevent automated attacks.' },
+                        { text: 'B) Expiration time', correct: false, feedback: '❌ Not quite. A short expiration window can still be exploited by high-speed tools.' },
+                        { text: 'C) Rate limiting and attempt restrictions', correct: true, feedback: '✅ Exactly — without rate limiting, even a short-lived OTP can be brute-forced.' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Initial Testing</h3><p>To analyze the authentication flow, I intercepted the OTP verification request using Burp Suite.</p><p>The request contained target email address and 6-digit OTP value.</p><p>I first performed manual testing by submitting multiple incorrect OTP values. Surprisingly, there were:</p><ul><li>No delays</li><li>No account lockouts</li><li>No visible restrictions</li><li>No error escalation mechanism</li></ul><p>This suggested a lack of brute force protection.</p>`
+                },
+                {
+                    type: 'interactive',
+                    id: 2,
+                    question: 'What is the next logical step after confirming no protection exists?',
+                    options: [
+                        { text: 'A) Stop testing', correct: false, feedback: '❌ Not quite. The lack of protection is a sign to investigate further.' },
+                        { text: 'B) Attempt automated brute force testing', correct: true, feedback: '✅ Correct — automation is required to validate brute force feasibility and impact.' },
+                        { text: 'C) Change target email', correct: false, feedback: '❌ Not quite. Testing on the current target is enough to prove the flaw.' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Exploitation</h3><p>To further test the system, I used Burp Suite Intruder for automated OTP guessing.</p><h4>Key observations:</h4><ul><li>OTP range: 000000 – 999999</li><li>No rate limiting detected</li><li>No CAPTCHA or bot mitigation</li><li>No account lockout after failed attempts</li></ul><p>This resulted in a key security issue: </br><strong>A predictable 1,000,000-value space with no restrictions makes brute force feasible within the OTP validity window.</strong></p>
+                    <img src="assets/1.png" class="writeup-image" alt="">
+                    <img src="assets/2.png" class="writeup-image" alt="">`
+                },
+                {
+                    type: 'interactive',
+                    id: 3,
+                    question: 'Why is a 6-digit OTP vulnerable without protections?',
+                    options: [
+                        { text: 'A) It is too long to brute force', correct: false, feedback: '❌ Incorrect. 6 digits is actually quite short for automated guessing.' },
+                        { text: 'B) The keyspace is small and unprotected against automation', correct: true, feedback: '✅ Correct — small search space (1 million) + no protection = high brute force vulnerability.' },
+                        { text: 'C) OTP cannot be reused', correct: false, feedback: '❌ Not quite. The issue is not reuse, but weak protection over a small keyspace.' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Result</h3><p>After automated requests, a valid OTP was successfully identified. Once submitted:</p><ul><li>The server returned a valid authentication token (JWT)</li><li>The user session was created</li><li>Full access to the account was granted</li></ul><p>This occurred without access to the victim’s email, prior authentication, or any user interaction.</p>`
+                },
+                {
+                    type: 'interactive',
+                    id: 4,
+                    question: 'What is the final impact of this vulnerability?',
+                    options: [
+                        { text: 'A) Information disclosure', correct: false, feedback: '❌ Not quite. This goes beyond simple disclosure.' },
+                        { text: 'B) Account Takeover (ATO) via authentication bypass', correct: true, feedback: '✅ Correct — this leads directly to full account compromise.' },
+                        { text: 'C) Session fixation', correct: false, feedback: '❌ Not quite. This is a full authentication bypass scenario.' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Impact</h3><p>This vulnerability enables full account compromise, unauthorized actions on behalf of users, and access to sensitive user data. It can be used for large-scale automated attacks against multiple accounts, causing significant financial and reputational damage.</p><h3>Severity Assessment (CVSS v3.1)</h3><ul><li>Attack Vector (AV): Network</li><li>Attack Complexity (AC): Low</li><li>Privileges Required (PR): None</li><li>User Interaction (UI): None</li><li>Scope (S): Unchanged</li><li>Confidentiality (C): High</li><li>Integrity (I): High</li><li>Availability (A): None</li></ul><p><strong>Estimated Score: <span class="severity-critical">9.1 (Critical)</span></strong></p><h3>Root Cause</h3><p>The vulnerability exists due to multiple missing security controls: no rate limiting, no attempt restrictions, and no bot protection. The endpoint directly issues a JWT upon success, effectively converting OTP verification into full authentication bypass.</p>`
+                }
+            ]
+        },
         'email-parameter-pollution': {
             title: 'Email Parameter Pollution Leading to API Key Misdelivery (<span class="severity-informative">Informative</span> | <span class="difficulty-easy">Difficulty: Easy</span>)',
             teaser: 'Sensitive API key misdelivery via duplicate parameter submission in unauthenticated requests.',
@@ -296,6 +367,7 @@ attacker@example.com</br>
                 }
             ]
         },
+
 
         'Write-up is cooking... stay tuned... ': {
             title: 'Write-up is cooking... stay tuned...',
