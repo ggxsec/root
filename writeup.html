@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-PV8HB6EDBG"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-PV8HB6EDBG');
+</script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Write-up Viewer | GGxSEC</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body class="writeup-page">
+
+    <header>
+        <div class="container">
+            <h1>GGxSEC</h1>
+            <p class="tagline">
+                <span class="highlight">Technical Write-up</span>
+            </p>
+        </div>
+    </header>
+
+    <main class="container">
+        <div id="viewer-header">
+            <h2 id="viewer-title">Establishing Connection...</h2>
+            <div class="viewer-controls">
+                <button id="mode-toggle" class="btn-outline-terminal">Loading Interface...</button>
+                <a href="index.html" class="btn-outline-terminal">Back to Home</a>
+            </div>
+        </div>
+
+        <div id="writeup-content">
+            <!-- Content dynamically injected here -->
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2026 GGXSEC. Independent Security Research.</p>
+        </div>
+    </footer>
+
+    <script src="interactive.js"></script>
+</body>
+
+</html>
