@@ -313,6 +313,7 @@ ul li::before {
     border: 1px solid var(--border-color);
 }
 
+/* Block-level code (crypto cards, etc.) */
 code {
     color: #fff;
     background-color: #111;
@@ -320,6 +321,17 @@ code {
     border-radius: 2px;
     word-break: break-all;
     border-left: 3px solid var(--accent-color);
+}
+
+/* Inline code inside prose — subtle, readable */
+p code, li code, h3 code, h4 code {
+    color: var(--accent-color);
+    background-color: rgba(0, 255, 65, 0.07);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    border-left: none;
+    font-size: 0.92em;
+    word-break: normal;
 }
 
 /* Contact Links */
@@ -568,6 +580,29 @@ footer p {
     font-weight: 500;
     font-variant-ligatures: none;
     letter-spacing: 0.5px;
+}
+
+/* AI Badge */
+.ai-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, #7c3aed, #a855f7);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: bold;
+    letter-spacing: 1.5px;
+    padding: 0.2rem 0.55rem;
+    border-radius: 3px;
+    vertical-align: middle;
+    margin-left: 0.4rem;
+    box-shadow: 0 0 8px rgba(168, 85, 247, 0.5);
+    animation: ai-pulse 2.5s ease-in-out infinite;
+    text-transform: uppercase;
+    cursor: default;
+}
+
+@keyframes ai-pulse {
+    0%, 100% { box-shadow: 0 0 6px rgba(168, 85, 247, 0.4); }
+    50%       { box-shadow: 0 0 14px rgba(168, 85, 247, 0.85); }
 }
 
 /* Code Blocks */

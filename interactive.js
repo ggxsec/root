@@ -13,7 +13,75 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const writeups = {
 
-
+        'sso-oauth-dom-xss-waf-bypass': {
+            ai: true,
+            title: 'DOM XSS via Unsigned OAuth State & Dual-Layer WAF Bypass Leading to ATO (<span class="severity-critical">Critical Severity</span> | <span class="difficulty-hard">Difficulty: Hard</span>) <span class="ai-badge" title="AI-Assisted Write-up">✦ AI</span>',
+            teaser: 'Full account takeover via chained DOM XSS, parenthesis-free WAF bypass, window.name persistence, and CORS-amplified token exfiltration through an unsigned OAuth state parameter.',
+            severity: 'Critical',
+            difficulty: 'Hard',
+            steps: [
+                {
+                    type: 'text',
+                    content: `<h3>Scenario</h3><p>This assessment focuses on the security of a Single Sign-On (SSO) OAuth authentication flow used for a corporate file-sharing web application (share.TARGET.com).</p><p>When a user accesses a shared file link unauthenticated, the system initiates an OAuth login flow via a third-party Identity Provider (IdP). To redirect the user back to the correct file after login, the application uses a <code>?redirect=[URL]</code> query parameter.</p><p>At first glance, the flow appeared standard. The environment was also protected by <strong>two layers of WAFs</strong>. However, instead of assuming the routing and WAFs were foolproof, I analyzed the flow from an attacker's perspective:</p><p><strong>What happens to this redirect parameter during the OAuth round-trip, and can the frontend router be tricked into executing code if the WAFs are bypassed?</strong></p>`
+                },
+                {
+                    type: 'interactive',
+                    id: 1,
+                    question: 'The frontend router checks the returnTo URL: if "local", it calls router.push(); otherwise it executes window.location.href = returnTo. The OAuth state object carrying returnTo is NOT signed. What is the primary cryptographic failure that makes this entire attack chain possible?',
+                    options: [
+                        { text: 'A) The OAuth access token has a long expiry time, allowing replay attacks.', correct: false, feedback: '❌ Incorrect. Token expiry is unrelated to this specific attack vector. The issue is about the integrity of the OAuth state parameter, not token lifetime.' },
+                        { text: 'B) The state parameter is not HMAC-signed or verified by the application, so a tampered returnTo value is trusted blindly by the client after the IdP echoes it back.', correct: true, feedback: '✅ Exactly. Without HMAC or signature verification on the state, an attacker fully controls the returnTo value that the frontend router processes post-authentication. This is the root cryptographic failure that enables the entire chain.' },
+                        { text: 'C) The IdP does not use PKCE, allowing authorization code interception by a network attacker.', correct: false, feedback: '❌ Not quite. PKCE protects against authorization code interception by a third party. This attack abuses the unsigned state parameter controlled by the attacker themselves, not code interception.' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Initial Testing</h3><p>To analyze the authentication flow, I intercepted the SSO initiation request and traced the <code>?redirect</code> parameter through the entire OAuth round-trip.</p><p>Key observations:</p><ul><li>The redirect parameter was placed <strong>verbatim</strong> into the OAuth <code>state.returnTo</code> object by the frontend</li><li>The IdP echoed the state back upon successful authentication</li><li>The state object was <strong>not signed or HMAC-verified</strong></li><li>The frontend router used a flawed regex to determine if the URL was "local" — if not, it executed <code>window.location.href = returnTo</code></li></ul><p>Basic XSS payloads like <code>javascript:alert(1)</code> were immediately blocked (HTTP 403). Extensive probing revealed the WAF blocked:</p><ul><li>The <code>javascript:</code> scheme followed by parentheses or backticks</li><li>The substring <code>document.</code></li></ul><p>The fundamental weakness still existed — the WAF just needed to be bypassed.</p>`
+                },
+                {
+                    type: 'interactive',
+                    id: 2,
+                    question: 'The WAF blocks javascript: followed by ( or backticks, and blocks the string "document.". You need to call alert() without parentheses. Which of the following payloads achieves parenthesis-free JavaScript execution and why does it work?',
+                    options: [
+                        { text: 'A) javascript:eval("alert(1)") — wrapping in eval() hides the parentheses from the WAF pattern.', correct: false, feedback: '❌ Incorrect. eval("alert(1)") still contains parentheses — both the eval() call itself and the inner alert(1). The WAF would block this.' },
+                        { text: 'B) javascript:throw onerror=alert,origin — assigns alert to window.onerror, then throw raises an exception using the comma operator, which the browser passes to window.onerror (now alert) automatically.', correct: true, feedback: '✅ Correct. This is a classic parenthesis-free XSS technique. The comma operator evaluates both sides but yields the rightmost value (origin). throw raises that as an uncaught exception, which the browser passes to window.onerror — which has been reassigned to alert. No parentheses, no blocked keywords.' },
+                        { text: 'C) javascript:window["alert"](1) — using bracket notation bypasses the parenthesis check since ( is not used directly after the function name.', correct: false, feedback: '❌ Incorrect. window["alert"](1) still uses parentheses () to invoke the function. The WAF checks for ( anywhere after javascript:, so this would still be blocked.' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Exploitation</h3><h4>Step 1: WAF Bypass (Execution Proof)</h4><p>I crafted a parenthesis-free payload using JavaScript's onerror handler and the throw statement:</p><div class="terminal-code">javascript:throw onerror=alert,origin</div><p><strong>Mechanism:</strong> This assigns <code>window.onerror</code> to the alert function. The comma operator yields origin, and throw raises an uncaught exception which the browser passes to <code>window.onerror</code> (now alert). No parentheses — both WAF layers bypassed.</p><h4>Step 2: Weaponization — The window.name Two-Stage Payload</h4><p>Proving execution wasn't enough. I needed to steal the user's refresh token from <code>localStorage</code>. Since reading storage requires parentheses (e.g., <code>getItem()</code>, <code>fetch()</code>), I used a <strong>window.name persistence</strong> technique:</p><ul><li><strong>Stage 1</strong> (sent via the redirect param — passes WAF):<div class="terminal-code">javascript:throw onerror=eval,name</div>This evaluates whatever payload is stored in the browser tab's <code>window.name</code> property.</li><li><strong>Stage 2</strong> (hosted on attacker-controlled site — WAF never sees it): Sets the complex payload into <code>window.name</code>, then redirects to the vulnerable TARGET URL. Since <code>window.name</code> persists across redirects and is never sent in HTTP requests, the WAF has no visibility into it.</li></ul><h4>Step 3: CORS Amplifier</h4><p>During recon on api.TARGET.com, I discovered a permissive CORS misconfiguration: the API reflected any provided Origin header (including null) and allowed the Authorization header. Once the XSS exfiltrated the victim's token, this CORS flaw let the attacker's domain directly read API responses cross-origin.</p>`
+                },
+                {
+                    type: 'interactive',
+                    id: 3,
+                    question: 'The Stage 1 payload is javascript:throw onerror=eval,name. Stage 2 is a complex payload stored in window.name on an attacker page. Why is this split specifically necessary — why not just embed the full token-stealing payload directly in the redirect parameter?',
+                    options: [
+                        { text: 'A) window.name has a larger character limit than a URL query parameter, allowing more complex payloads.', correct: false, feedback: '❌ Partially true in practice, but this is NOT the primary reason for the split. The WAF is the critical constraint here, not URL length limits.' },
+                        { text: 'B) The full payload requires parentheses (for getItem(), fetch(), etc.) and/or contains strings like "document." — both of which the WAF blocks in the redirect parameter. By staging the complex payload in window.name on an external page, it is never inspected by the WAF, completely circumventing both rule sets.', correct: true, feedback: '✅ Exactly. This is the core evasion insight. The WAF only inspects the HTTP request to TARGET. The complex Stage 2 payload lives in window.name, which persists across cross-origin redirects and is never transmitted in the HTTP request body or URL. The WAF is architecturally blind to it.' },
+                        { text: 'C) Splitting the payload is required because javascript: URIs cannot exceed 100 characters in modern browsers.', correct: false, feedback: '❌ Incorrect. There is no such browser-enforced character limit on javascript: URIs. The split is a WAF evasion strategy, not a browser compatibility workaround.' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Result</h3><p>By hosting a simple HTML page with the Stage 2 payload and sending the link to a victim:</p><ol><li>The victim clicks the link → the attacker page sets <code>window.name</code> and redirects them to the TARGET SSO login</li><li>The WAF sees only the benign-looking Stage 1 payload: <code>javascript:throw onerror=eval,name</code></li><li>Upon SSO completion, the frontend router executes Stage 1</li><li>Stage 1 runs <code>eval(window.name)</code>, executing Stage 2 which reads the IdP refresh token from <code>localStorage</code> and exfiltrates it to the attacker's listener</li><li>The attacker exchanges the stolen refresh token at the IdP for a fresh API access token</li></ol><p>This occurred with <strong>a single click</strong> from the victim. If already logged in, the flow completed <strong>instantly and silently</strong>.</p>`
+                },
+                {
+                    type: 'interactive',
+                    id: 4,
+                    question: 'The API at api.TARGET.com reflects any Origin header and allows Authorization headers via CORS. After exfiltrating the victim\'s refresh token, how does this CORS misconfiguration amplify the attack beyond what DOM XSS alone achieves?',
+                    options: [
+                        { text: 'A) It allows the attacker to bypass the Same-Origin Policy, making authenticated cross-origin API requests from their own malicious domain using the stolen token — directly reading API responses without needing to stay in the victim\'s browser context.', correct: true, feedback: '✅ Correct. This is the CORS amplification. Normally, even with a stolen token, an attacker\'s domain cannot read cross-origin API responses due to the SOP. But with a reflected-Origin CORS policy that allows Authorization headers, the attacker\'s server can make authenticated requests and fully read the responses. This enables persistent account access from the attacker\'s infrastructure — no victim browser needed.' },
+                        { text: 'B) It allows the attacker to inject arbitrary headers into the victim\'s requests, enabling HTTP request smuggling against the backend.', correct: false, feedback: '❌ Incorrect. CORS misconfigurations control cross-origin read access to responses. They do not enable header injection into victim requests or HTTP request smuggling, which is a server-side protocol desynchronization issue.' },
+                        { text: 'C) It allows the attacker to read the victim\'s cookies from the api.TARGET.com domain using document.cookie in a cross-origin iframe.', correct: false, feedback: '❌ Incorrect. The SOP prevents cross-origin iframe access to document.cookie regardless of CORS headers. CORS governs XMLHttpRequest/fetch response access, not DOM access between frames. Also, the attack already has the refresh token — cookie theft via iframe is a separate technique (clickjacking/XSS-based).' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Impact</h3><p>This vulnerability enables <strong>full Account Takeover (ATO)</strong>. By chaining DOM XSS, WAF bypass, and token theft, an attacker gains persistent read/write access to the victim's account. Because of the API CORS misconfiguration, the attacker can seamlessly extract private files, user data, and workspace configurations directly from their own malicious domain using the stolen token. It can easily be weaponized for targeted phishing campaigns.</p><h3>Severity Assessment (CVSS v3.1)</h3><ul><li>Attack Vector (AV): Network</li><li>Attack Complexity (AC): Low</li><li>Privileges Required (PR): None</li><li>User Interaction (UI): Required</li><li>Scope (S): Changed</li><li>Confidentiality (C): High</li><li>Integrity (I): High</li><li>Availability (A): None</li></ul><p><strong>Estimated Score: <span class="severity-critical">9.3 (Critical)</span></strong></p><h3>Root Cause</h3><p>The vulnerability exists due to a chain of security failures:</p><ul><li><strong>Unverified Input:</strong> The OAuth state object was trusted blindly by the client without HMAC or signature verification</li><li><strong>Improper Scheme Validation:</strong> The frontend router used a flawed regular expression, allowing the <code>javascript:</code> scheme to reach <code>window.location.href</code></li><li><strong>Defense-in-Depth Failure:</strong> The CSP was set to <code>report-only</code> mode and not actively enforced, failing to block inline script execution</li><li><strong>Token Storage:</strong> Sensitive long-lived refresh tokens were stored in <code>localStorage</code> instead of secure, HttpOnly cookies</li></ul>`
+                }
+            ]
+        },
         'otp-brute-force': {
             title: 'OTP Brute Force Leading to Account Takeover (<span class="severity-critical">Critical Severity</span> | <span class="difficulty-easy">Difficulty: Easy</span>)',
             teaser: 'Authentication bypass and full account takeover via automated OTP guessing due to missing rate limits.',
@@ -81,100 +149,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 {
                     type: 'text',
                     content: `<h3>Impact</h3><p>This vulnerability enables full account compromise, unauthorized actions on behalf of users, and access to sensitive user data. It can be used for large-scale automated attacks against multiple accounts, causing significant financial and reputational damage.</p><h3>Severity Assessment (CVSS v3.1)</h3><ul><li>Attack Vector (AV): Network</li><li>Attack Complexity (AC): Low</li><li>Privileges Required (PR): None</li><li>User Interaction (UI): None</li><li>Scope (S): Unchanged</li><li>Confidentiality (C): High</li><li>Integrity (I): High</li><li>Availability (A): None</li></ul><p><strong>Estimated Score: <span class="severity-critical">9.1 (Critical)</span></strong></p><h3>Root Cause</h3><p>The vulnerability exists due to multiple missing security controls: no rate limiting, no attempt restrictions, and no bot protection. The endpoint directly issues a JWT upon success, effectively converting OTP verification into full authentication bypass.</p>`
-                }
-            ]
-        },
-        'email-parameter-pollution': {
-            title: 'Email Parameter Pollution Leading to API Key Misdelivery (<span class="severity-informative">Informative</span> | <span class="difficulty-easy">Difficulty: Easy</span>)',
-            teaser: 'Sensitive API key misdelivery via duplicate parameter submission in unauthenticated requests.',
-            severity: 'Informative',
-            difficulty: 'Easy',
-            steps: [
-                {
-                    type: 'text',
-                    content: `<h3>Scenario</h3><p>While reviewing a publicly accessible feature in a web application, I noticed a functionality that allowed users to activate an API key by simply submitting an email address — without requiring authentication.</p><p>Once an email was submitted, the system would generate and send an API key directly to that address.</p><p>This raised an interesting question: <strong>What happens if multiple email values are supplied in the same request?</strong></p>`
-                },
-                {
-                    type: 'interactive',
-                    id: 1,
-                    question: 'What type of vulnerability involves manipulating input parameters by sending multiple values for the same field?',
-                    options: [
-                        { text: 'A) SQL Injection', correct: false, feedback: '❌ Not quite. This issue is related to how input parameters are parsed.' },
-                        { text: 'B) Parameter Pollution', correct: true, feedback: '✅ Correct — parameter pollution occurs when an application fails to properly handle duplicate parameters.' },
-                        { text: 'C) CSRF', correct: false, feedback: '❌ Not quite. This issue is related to how input parameters are parsed.' }
-                    ]
-                },
-                {
-                    type: 'text',
-                    content: `<h3>Initial Testing</h3><p>To test this behavior, I intercepted the API activation request using Burp Suite.</p><p>The original request contained a single email parameter:</p><div class="terminal-code">email=victim@example.com</div><p>I modified the request by adding a second email parameter with my own address.</p>`
-                },
-                {
-                    type: 'interactive',
-                    id: 2,
-                    question: 'What is the goal of adding duplicate parameters in this scenario?',
-                    options: [
-                        { text: 'A) Crash the server', correct: false, feedback: '❌ Not quite. The goal is to influence backend logic.' },
-                        { text: 'B) Manipulate how the backend processes input values', correct: true, feedback: '✅ Exactly — different backends handle duplicate parameters differently, which can lead to unexpected behavior.' },
-                        { text: 'C) Increase response size', correct: false, feedback: '❌ Not quite. The goal is to influence backend logic.' }
-                    ]
-                },
-                {
-                    type: 'text',
-                    content: `<h3>Modified Request (Sanitized Example)</h3><p>Below is a simplified and sanitized version of the request:</p>
-                    <div class="terminal-code">
-POST /api/v1/register HTTP/1.1</br>
-Host: api.example.com</br>
-Content-Type: multipart/form-data; boundary=----boundary</br>
-</br>
-------boundary</br>
-Content-Disposition: form-data; name="email"</br>
-</br>
-victim@example.com</br>
-------boundary</br>
-Content-Disposition: form-data; name="email"</br>
-</br>
-attacker@example.com</br>
-------boundary--
-                    </div>
-                    <h4>Explanation</h4>
-                    <ul>
-                        <li>Two email parameters are sent in the same request</li>
-                        <li>One belongs to the victim</li>
-                        <li>One belongs to the attacker</li>
-                        <li>The backend does not properly validate or restrict duplicate parameters</li>
-                    </ul>`
-                },
-                {
-                    type: 'text',
-                    content: `<h3>Observation</h3><p>After sending the modified request, the application processed both email values.</p><p>As a result:</p><ul><li>The API key was generated successfully</li><li>The key was delivered to both email addresses</li><li>The attacker received the same API key intended for the victim</li></ul>`
-                },
-                {
-                    type: 'interactive',
-                    id: 3,
-                    question: 'What is the core issue in this behavior?',
-                    options: [
-                        { text: 'A) Missing authentication', correct: false, feedback: '❌ Not quite. The issue is input parsing logic.' },
-                        { text: 'B) Improper handling of duplicate parameters', correct: true, feedback: '✅ Correct — the backend fails to properly handle multiple inputs for a single parameter.' },
-                        { text: 'C) Weak encryption', correct: false, feedback: '❌ Not quite. The issue is input parsing logic.' }
-                    ]
-                },
-                {
-                    type: 'text',
-                    content: `<h3>Impact</h3><p>In this specific case, the impact was limited:</p><ul><li>No sensitive data could be accessed via the API</li><li>The key itself did not expose critical functionality</li></ul><p>However, a potential abuse scenario exists:</p><ul><li>An attacker could consume the API rate limit of another user</li><li>This could lead to denial of service for legitimate users</li><li>Abuse could be scaled using automated requests</li></ul>`
-                },
-                {
-                    type: 'interactive',
-                    id: 4,
-                    question: 'What is the most realistic impact here?',
-                    options: [
-                        { text: 'A) Full account takeover', correct: false, feedback: '❌ Not quite. This is not a high-impact exploit.' },
-                        { text: 'B) Rate limit abuse / resource consumption', correct: true, feedback: '✅ Exactly — the impact is limited but still relevant.' },
-                        { text: 'C) Remote code execution', correct: false, feedback: '❌ Not quite. This is not a high-impact exploit.' }
-                    ]
-                },
-                {
-                    type: 'text',
-                    content: `<h3>Severity Assessment</h3><p>Based on the FIRST CVSS v3.1 standard:</p><ul><li>Attack Vector (AV): Network</li><li>Attack Complexity (AC): Low</li><li>Privileges Required (PR): None</li><li>User Interaction (UI): None</li><li>Scope (S): Unchanged</li><li>Confidentiality (C): None</li><li>Integrity (I): None</li><li>Availability (A): Low</li></ul><p><strong>Estimated CVSS Score: <span class="severity-informative">2.6 – 3.7 (Informative / Low)</span></strong></p><h3>Root Cause</h3><p>The vulnerability exists due to improper input handling: the backend accepts multiple values for the same parameter, no validation or normalization is applied, and the system processes all values instead of enforcing a single input. Email ownership is not verified before sending sensitive data.</p>`
                 }
             ]
         },
@@ -277,6 +251,100 @@ attacker@example.com</br>
                 }
             ]
         },
+        'email-parameter-pollution': {
+            title: 'Email Parameter Pollution Leading to API Key Misdelivery (<span class="severity-informative">Informative</span> | <span class="difficulty-easy">Difficulty: Easy</span>)',
+            teaser: 'Sensitive API key misdelivery via duplicate parameter submission in unauthenticated requests.',
+            severity: 'Informative',
+            difficulty: 'Easy',
+            steps: [
+                {
+                    type: 'text',
+                    content: `<h3>Scenario</h3><p>While reviewing a publicly accessible feature in a web application, I noticed a functionality that allowed users to activate an API key by simply submitting an email address — without requiring authentication.</p><p>Once an email was submitted, the system would generate and send an API key directly to that address.</p><p>This raised an interesting question: <strong>What happens if multiple email values are supplied in the same request?</strong></p>`
+                },
+                {
+                    type: 'interactive',
+                    id: 1,
+                    question: 'What type of vulnerability involves manipulating input parameters by sending multiple values for the same field?',
+                    options: [
+                        { text: 'A) SQL Injection', correct: false, feedback: '❌ Not quite. This issue is related to how input parameters are parsed.' },
+                        { text: 'B) Parameter Pollution', correct: true, feedback: '✅ Correct — parameter pollution occurs when an application fails to properly handle duplicate parameters.' },
+                        { text: 'C) CSRF', correct: false, feedback: '❌ Not quite. This issue is related to how input parameters are parsed.' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Initial Testing</h3><p>To test this behavior, I intercepted the API activation request using Burp Suite.</p><p>The original request contained a single email parameter:</p><div class="terminal-code">email=victim@example.com</div><p>I modified the request by adding a second email parameter with my own address.</p>`
+                },
+                {
+                    type: 'interactive',
+                    id: 2,
+                    question: 'What is the goal of adding duplicate parameters in this scenario?',
+                    options: [
+                        { text: 'A) Crash the server', correct: false, feedback: '❌ Not quite. The goal is to influence backend logic.' },
+                        { text: 'B) Manipulate how the backend processes input values', correct: true, feedback: '✅ Exactly — different backends handle duplicate parameters differently, which can lead to unexpected behavior.' },
+                        { text: 'C) Increase response size', correct: false, feedback: '❌ Not quite. The goal is to influence backend logic.' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Modified Request (Sanitized Example)</h3><p>Below is a simplified and sanitized version of the request:</p>
+                    <div class="terminal-code">
+POST /api/v1/register HTTP/1.1</br>
+Host: api.example.com</br>
+Content-Type: multipart/form-data; boundary=----boundary</br>
+</br>
+------boundary</br>
+Content-Disposition: form-data; name="email"</br>
+</br>
+victim@example.com</br>
+------boundary</br>
+Content-Disposition: form-data; name="email"</br>
+</br>
+attacker@example.com</br>
+------boundary--
+                    </div>
+                    <h4>Explanation</h4>
+                    <ul>
+                        <li>Two email parameters are sent in the same request</li>
+                        <li>One belongs to the victim</li>
+                        <li>One belongs to the attacker</li>
+                        <li>The backend does not properly validate or restrict duplicate parameters</li>
+                    </ul>`
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Observation</h3><p>After sending the modified request, the application processed both email values.</p><p>As a result:</p><ul><li>The API key was generated successfully</li><li>The key was delivered to both email addresses</li><li>The attacker received the same API key intended for the victim</li></ul>`
+                },
+                {
+                    type: 'interactive',
+                    id: 3,
+                    question: 'What is the core issue in this behavior?',
+                    options: [
+                        { text: 'A) Missing authentication', correct: false, feedback: '❌ Not quite. The issue is input parsing logic.' },
+                        { text: 'B) Improper handling of duplicate parameters', correct: true, feedback: '✅ Correct — the backend fails to properly handle multiple inputs for a single parameter.' },
+                        { text: 'C) Weak encryption', correct: false, feedback: '❌ Not quite. The issue is input parsing logic.' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Impact</h3><p>In this specific case, the impact was limited:</p><ul><li>No sensitive data could be accessed via the API</li><li>The key itself did not expose critical functionality</li></ul><p>However, a potential abuse scenario exists:</p><ul><li>An attacker could consume the API rate limit of another user</li><li>This could lead to denial of service for legitimate users</li><li>Abuse could be scaled using automated requests</li></ul>`
+                },
+                {
+                    type: 'interactive',
+                    id: 4,
+                    question: 'What is the most realistic impact here?',
+                    options: [
+                        { text: 'A) Full account takeover', correct: false, feedback: '❌ Not quite. This is not a high-impact exploit.' },
+                        { text: 'B) Rate limit abuse / resource consumption', correct: true, feedback: '✅ Exactly — the impact is limited but still relevant.' },
+                        { text: 'C) Remote code execution', correct: false, feedback: '❌ Not quite. This is not a high-impact exploit.' }
+                    ]
+                },
+                {
+                    type: 'text',
+                    content: `<h3>Severity Assessment</h3><p>Based on the FIRST CVSS v3.1 standard:</p><ul><li>Attack Vector (AV): Network</li><li>Attack Complexity (AC): Low</li><li>Privileges Required (PR): None</li><li>User Interaction (UI): None</li><li>Scope (S): Unchanged</li><li>Confidentiality (C): None</li><li>Integrity (I): None</li><li>Availability (A): Low</li></ul><p><strong>Estimated CVSS Score: <span class="severity-informative">2.6 – 3.7 (Informative / Low)</span></strong></p><h3>Root Cause</h3><p>The vulnerability exists due to improper input handling: the backend accepts multiple values for the same parameter, no validation or normalization is applied, and the system processes all values instead of enforcing a single input. Email ownership is not verified before sending sensitive data.</p>`
+                }
+            ]
+        },
         'stored-xss-game-rules': {
             title: 'Stored XSS via Filter Bypass in Game Rules Section (<span class="severity-high">High Severity</span> | <span class="difficulty-easy">Difficulty: Easy</span>)',
             teaser: 'Stored XSS on a gaming platform by bypassing weak input filters using malformed HTML structures.',
@@ -367,8 +435,6 @@ attacker@example.com</br>
                 }
             ]
         },
-
-
         'Write-up is cooking... stay tuned... ': {
             title: 'Write-up is cooking... stay tuned...',
             teaser: '',
@@ -386,15 +452,7 @@ attacker@example.com</br>
 
             ]
         },
-        'Bypassing WAF ...': {
-            title: 'Bypassing WAF ...',
-            teaser: '',
-            severity: 'Unknown',
-            difficulty: 'Unknown (yet)',
-            steps: [
 
-            ]
-        }
     };
 
     // --- Pagination and Gallery Logic ---
@@ -418,8 +476,9 @@ attacker@example.com</br>
                 const data = writeups[id];
                 const item = document.createElement('div');
                 item.className = 'writeup-item fade-in';
+                const aiBadge = data.ai ? ' <span class="ai-badge" title="AI-Assisted Write-up">✦ AI</span>' : '';
                 item.innerHTML = `
-                    <h3>${data.title.split(' (')[0]}</h3>
+                    <h3>${data.title.split(' (')[0]}${aiBadge}</h3>
                     <p><span class="severity-${data.severity.toLowerCase()}">${data.severity} Severity</span> | <span class="difficulty-${data.difficulty.toLowerCase()}">Difficulty: ${data.difficulty}</span></p>
                     <p>${data.teaser}</p>
                     <div class="writeup-actions">
